@@ -10,14 +10,7 @@ on:
         options:
           - billing
           - gateway
-          - lead_automator
-          - payment-process
-          - payment
-          - plan
-          - prepaid-credits-api
-          - profile-management
-          - usage-api
-
+          - other
       aws_environment:
         description: 'AWS environment for deployment'
         required: true
@@ -26,12 +19,10 @@ on:
           - dev
           - psqa
           - production
-
       aws_region:
         description: 'AWS region (default: us-west-2)'
         required: false
         default: 'us-west-2'
-
       default_tag:
         description: 'Docker image tag (e.g., latest, sha, version)'
         required: false
@@ -43,7 +34,6 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v3
@@ -61,8 +51,6 @@ jobs:
           IMAGE_TAG="${{ github.event.inputs.default_tag }}"
           AWS_REGION="${{ github.event.inputs.aws_region }}"
 
-          echo "🔧 Loading config for service '$SERVICE' in environment '$ENVIRONMENT'..."
-
           AWS_ACCOUNT_ID=$(yq e '.default.aws_account_id' $CONFIG_FILE)
           CLUSTER=$(yq e ".environments.\"$ENVIRONMENT\".cluster" $CONFIG_FILE)
           SERVICE_NAME=$(yq e ".services.\"$SERVICE\".name" $CONFIG_FILE)
@@ -72,8 +60,16 @@ jobs:
           echo "AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID" >> $GITHUB_ENV
           echo "CLUSTER=$CLUSTER" >> $GITHUB_ENV
           echo "SERVICE_NAME=$SERVICE_NAME" >> $GITHUB_ENV
-          echo "CONTAINER_NAME=$CONTAINER_NAME" >> $GITHUB_ENV
-          echo "TASK_DEFINITION=$TASK_DEFINITION" >> $GITHUB_ENV
+
+      - name: Send Slack - Deployment Started
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": ":rocket: Deployment started for *${{ github.event.inputs.service }}* in *${{ github.event.inputs.aws_environment }}* by `${{ github.actor }}`"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -91,3 +87,25 @@ jobs:
             --force-new-deployment
 
           echo "✅ ECS service update triggered for $SERVICE_NAME"
+
+      - name: Send Slack - Deployment Success
+        if: success()
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": ":white_check_mark: Deployment *succeeded* for *${{ github.event.inputs.service }}* in *${{ github.event.inputs.aws_environment }}*"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Send Slack - Deployment Failed
+        if: failure()
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": ":x: Deployment *failed* for *${{ github.event.inputs.service }}* in *${{ github.event.inputs.aws_environment }}*"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
