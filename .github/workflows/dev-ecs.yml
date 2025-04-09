@@ -1,0 +1,93 @@
+name: Deploy Service to AWS ECS
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service name (matching deploy-config.yaml)'
+        required: true
+        type: choice
+        options:
+          - billing
+          - gateway
+          - lead_automator
+          - payment-process
+          - payment
+          - plan
+          - prepaid-credits-api
+          - profile-management
+          - usage-api
+
+      aws_environment:
+        description: 'AWS environment for deployment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - psqa
+          - production
+
+      aws_region:
+        description: 'AWS region (default: us-west-2)'
+        required: false
+        default: 'us-west-2'
+
+      default_tag:
+        description: 'Docker image tag (e.g., latest, sha, version)'
+        required: false
+        default: 'latest'
+
+env:
+  CONFIG_FILE: deploy-config.yaml
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Install yq
+        run: |
+          sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
+
+      - name: Load Deploy Config
+        id: config
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.aws_environment }}"
+          SERVICE="${{ github.event.inputs.service }}"
+          IMAGE_TAG="${{ github.event.inputs.default_tag }}"
+          AWS_REGION="${{ github.event.inputs.aws_region }}"
+
+          echo "🔧 Loading config for service '$SERVICE' in environment '$ENVIRONMENT'..."
+
+          AWS_ACCOUNT_ID=$(yq e '.default.aws_account_id' $CONFIG_FILE)
+          CLUSTER=$(yq e ".environments.\"$ENVIRONMENT\".cluster" $CONFIG_FILE)
+          SERVICE_NAME=$(yq e ".services.\"$SERVICE\".name" $CONFIG_FILE)
+          CONTAINER_NAME=$(yq e ".services.\"$SERVICE\".container_name" $CONFIG_FILE)
+          TASK_DEFINITION=$(yq e ".services.\"$SERVICE\".task_definition" $CONFIG_FILE)
+
+          echo "AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID" >> $GITHUB_ENV
+          echo "CLUSTER=$CLUSTER" >> $GITHUB_ENV
+          echo "SERVICE_NAME=$SERVICE_NAME" >> $GITHUB_ENV
+          echo "CONTAINER_NAME=$CONTAINER_NAME" >> $GITHUB_ENV
+          echo "TASK_DEFINITION=$TASK_DEFINITION" >> $GITHUB_ENV
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ github.event.inputs.aws_region }}
+
+      - name: Update ECS Service
+        run: |
+          echo "🚀 Updating ECS service $SERVICE_NAME in cluster $CLUSTER..."
+
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE_NAME" \
+            --force-new-deployment
+
+          echo "✅ ECS service update triggered for $SERVICE_NAME"
